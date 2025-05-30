@@ -16,6 +16,7 @@
 #include <sys/socket.h>
 #include <net/if.h>
 #include <linux/if_link.h>
+#include <regex.h>
 
 #define MAX_LINE 256
 
@@ -701,6 +702,297 @@ void feature_3() {
     change_package_source();
 }
 
+// 校验IP地址格式
+int is_valid_ip(const char *ip) {
+    struct in_addr addr;
+    return inet_pton(AF_INET, ip, &addr) == 1;
+}
+
+// 校验掩码格式（255.255.255.0 或 /24）
+int is_valid_mask(const char *mask) {
+    // 支持 /24
+    if (mask[0] == '/' && atoi(mask+1) >= 0 && atoi(mask+1) <= 32) return 1;
+    // 支持 255.255.255.0
+    struct in_addr addr;
+    return inet_pton(AF_INET, mask, &addr) == 1;
+}
+
+// 获取所有物理网卡名，返回数量，names为输出数组
+int get_all_ifnames(char names[][IFNAMSIZ], int max) {
+    struct ifaddrs *ifaddr, *ifa;
+    int count = 0;
+    if (getifaddrs(&ifaddr) == -1) return 0;
+    for (ifa = ifaddr; ifa != NULL && count < max; ifa = ifa->ifa_next) {
+        if (ifa->ifa_addr && ifa->ifa_addr->sa_family == AF_PACKET) {
+            // 不重复
+            int found = 0;
+            int i;
+            for (i = 0; i < count; ++i) if (strcmp(names[i], ifa->ifa_name) == 0) { found = 1; break; }
+            if (!found) strncpy(names[count++], ifa->ifa_name, IFNAMSIZ);
+        }
+    }
+    freeifaddrs(ifaddr);
+    return count;
+}
+
+// 掩码长度转点分十进制
+void masklen_to_str(int masklen, char *out) {
+    unsigned int mask = masklen == 0 ? 0 : 0xFFFFFFFF << (32 - masklen);
+    sprintf(out, "%u.%u.%u.%u",
+        (mask >> 24) & 0xFF,
+        (mask >> 16) & 0xFF,
+        (mask >> 8) & 0xFF,
+        mask & 0xFF);
+}
+
+// 检查文件是否存在
+int file_exists(const char *path) {
+    FILE *fp = fopen(path, "r");
+    if (fp) { fclose(fp); return 1; }
+    return 0;
+}
+
+// 查找下一个可用的 IPADDRX 编号
+int find_next_ip_index(const char *path) {
+    FILE *f = fopen(path, "r");
+    if (!f) return 0;
+    int max_idx = 0;
+    char line[256];
+    while (fgets(line, sizeof(line), f)) {
+        int idx;
+        if (sscanf(line, "IPADDR%d=", &idx) == 1) {
+            if (idx > max_idx) max_idx = idx;
+        } else if (strncmp(line, "IPADDR=", 7) == 0 && max_idx == 0) {
+            max_idx = 0; // IPADDR= 视为0号
+        }
+    }
+    fclose(f);
+    return max_idx + 1;
+}
+
+// 实际添加IP到配置文件
+void do_add_ip(const char *ifname, const char *ip, const char *mask) {
+    // 检查 NetworkManager 是否 running
+    int is_nm_running = (system("systemctl is-active --quiet NetworkManager") == 0);
+    if (is_nm_running) {
+        // 优先用 nmcli 配置
+        char nmcli_cmd[512];
+        // 先查找对应网卡的 connection 名称
+        char con_name[128] = "";
+        char nmcli_query_cmd[256];
+        snprintf(nmcli_query_cmd, sizeof(nmcli_query_cmd), "nmcli -g GENERAL.CONNECTION device show %s 2>/dev/null", ifname);
+        FILE *con_fp = popen(nmcli_query_cmd, "r");
+        if (con_fp) {
+            if (fgets(con_name, sizeof(con_name), con_fp)) {
+                con_name[strcspn(con_name, "\n")] = '\0'; // 去除换行
+            }
+            pclose(con_fp);
+        }
+        if (strlen(con_name) == 0 || strcmp(con_name, "--") == 0) {
+            printf("未找到网卡 %s 的 NetworkManager 连接名，自动切换为配置文件方式。\n", ifname);
+            // 不 return，继续走后面配置文件逻辑
+        } else {
+            // 需要拼接 CIDR 掩码
+            int masklen = 0;
+            if (strchr(mask, '.')) {
+                // 点分十进制转掩码长度
+                unsigned int m1, m2, m3, m4;
+                if (sscanf(mask, "%u.%u.%u.%u", &m1, &m2, &m3, &m4) == 4) {
+                    int i;
+                    unsigned int mask32 = (m1 << 24) | (m2 << 16) | (m3 << 8) | m4;
+                    for (i = 31; i >= 0; --i) {
+                        if ((mask32 >> i) & 1) masklen++;
+                    }
+                }
+            } else if (mask[0] == '/' && atoi(mask+1) > 0) {
+                masklen = atoi(mask+1);
+            }
+            if (masklen <= 0 || masklen > 32) masklen = 24; // 默认
+            snprintf(nmcli_cmd, sizeof(nmcli_cmd),
+                "nmcli connection modify '%s' +ipv4.addresses %s/%d",
+                con_name, ip, masklen);
+            printf("检测到 NetworkManager 正在运行，推荐使用 nmcli 配置：\n%s\n", nmcli_cmd);
+            int ret = system(nmcli_cmd);
+            if (ret == 0) {
+                // 配置成功后激活连接
+                char up_cmd[256];
+                snprintf(up_cmd, sizeof(up_cmd), "nmcli connection up '%s' || ifup %s", con_name, ifname);
+                printf("正在激活连接: %s\n", up_cmd);
+                system(up_cmd);
+                printf("IP 已通过 nmcli 添加并激活。\n");
+                return;
+            } else {
+                printf("nmcli 配置失败，建议用 'nmcli connection show' 查看所有连接名，并手动配置。\n");
+                // 失败时也继续走配置文件逻辑
+            }
+        }
+    }
+    // 检测系统类型
+    FILE *fp = fopen("/etc/os-release", "r");
+    char osid[64] = "", line[256];
+    if (fp) {
+        while (fgets(line, sizeof(line), fp)) {
+            if (strncmp(line, "ID=", 3) == 0) {
+                sscanf(line, "ID=%63s", osid);
+                // 去除引号
+                size_t len = strlen(osid);
+                if (osid[0] == '"' || osid[0] == '\'') memmove(osid, osid+1, len-1);
+                if (osid[strlen(osid)-1] == '"' || osid[strlen(osid)-1] == '\'') osid[strlen(osid)-1] = 0;
+                break;
+            }
+        }
+        fclose(fp);
+    }
+    // Ubuntu/Debian
+    if (strstr(osid, "ubuntu") || strstr(osid, "debian")) {
+        char path[256];
+        snprintf(path, sizeof(path), "/etc/network/interfaces.d/%s.cfg", ifname);
+        if (!file_exists(path)) {
+            // 若主 interfaces 存在但 interfaces.d 不存在，则写主文件
+            if (!file_exists("/etc/network/interfaces.d") && file_exists("/etc/network/interfaces")) {
+                strcpy(path, "/etc/network/interfaces");
+            }
+        }
+        // 检查IP是否已存在
+        int ip_exists = 0;
+        FILE *checkf = fopen(path, "r");
+        if (checkf) {
+            char linebuf[256];
+            while (fgets(linebuf, sizeof(linebuf), checkf)) {
+                if (strstr(linebuf, ip)) { ip_exists = 1; break; }
+            }
+            fclose(checkf);
+        }
+        if (ip_exists) {
+            printf("该IP %s 已存在于 %s ，不重复添加。\n", ip, path);
+            return;
+        }
+        FILE *f = fopen(path, "a");
+        if (!f) { printf("无法写入 %s\n", path); return; }
+        fprintf(f, "auto %s\niface %s inet static\n    address %s\n    netmask %s\n", ifname, ifname, ip, mask);
+        fclose(f);
+        printf("已写入 %s\n", path);
+        // 配置文件方式直接重启network服务
+        printf("正在重启网络服务: systemctl restart network\n");
+        system("systemctl restart network");
+        return;
+    }
+    // CentOS/RHEL/Fedora
+    if (strstr(osid, "centos") || strstr(osid, "rhel") || strstr(osid, "fedora")) {
+        char path[256];
+        snprintf(path, sizeof(path), "/etc/sysconfig/network-scripts/ifcfg-%s", ifname);
+        int is_new_file = 0;
+        if (!file_exists(path)) {
+            snprintf(path, sizeof(path), "/etc/sysconfig/network-scripts/ifcfg-%s", ifname);
+            if (!file_exists(path)) {
+                is_new_file = 1;
+            }
+        }
+        // 检查IP是否已存在
+        int ip_exists = 0;
+        FILE *checkf = fopen(path, "r");
+        if (checkf) {
+            char linebuf[256];
+            while (fgets(linebuf, sizeof(linebuf), checkf)) {
+                if (strstr(linebuf, ip)) { ip_exists = 1; break; }
+            }
+            fclose(checkf);
+        }
+        if (ip_exists) {
+            printf("该IP %s 已存在于 %s ，不重复添加。\n", ip, path);
+            return;
+        }
+        int idx = file_exists(path) ? find_next_ip_index(path) : 0;
+        FILE *f = fopen(path, is_new_file ? "w" : "a");
+        if (!f) { printf("无法写入 %s\n", path); return; }
+        if (is_new_file) {
+            // 新建文件，写入完整配置
+            char gw[64] = "";
+            printf("请输入网关地址（可直接回车跳过）：");
+            fgets(gw, sizeof(gw), stdin); // 先清空输入缓冲
+            if (gw[0] == '\0' || gw[0] == '\n') {
+                // 可能上次scanf未清空，补一次
+                fgets(gw, sizeof(gw), stdin);
+            }
+            gw[strcspn(gw, "\n")] = '\0';
+            // 校验网关格式
+            int gw_valid = 0;
+            if (gw[0]) {
+                struct in_addr gw_addr;
+                if (inet_pton(AF_INET, gw, &gw_addr) == 1) {
+                    gw_valid = 1;
+                } else {
+                    printf("网关格式无效，未写入GATEWAY字段！\n");
+                }
+            }
+            fprintf(f, "DEVICE=%s\nBOOTPROTO=static\nONBOOT=yes\nIPADDR=%s\nNETMASK=%s\n", ifname, ip, mask);
+            if (gw_valid) {
+                fprintf(f, "GATEWAY=%s\n", gw);
+            }
+        } else {
+            fprintf(f, "IPADDR%d=%s\nNETMASK%d=%s\n", idx, ip, idx, mask);
+        }
+        fclose(f);
+        printf("已写入 %s\n", path);
+        // 判断是否为 CentOS 6
+        int is_centos6 = 0;
+        FILE *rel = fopen("/etc/centos-release", "r");
+        if (rel) {
+            char relstr[128] = "";
+            if (fgets(relstr, sizeof(relstr), rel)) {
+                if (strstr(relstr, "release 6")) is_centos6 = 1;
+            }
+            fclose(rel);
+        }
+        if (is_centos6) {
+            printf("正在重启网络服务: service network restart\n");
+            system("service network restart");
+        } else {
+            printf("正在重启网络服务: systemctl restart network\n");
+            system("systemctl restart network");
+        }
+        return;
+    }
+    printf("暂不支持该系统自动写入配置，请手动配置。\n");
+}
+
+// 新增IP交互
+void add_ip() {
+    char ifnames[32][IFNAMSIZ];
+    int n = get_all_ifnames(ifnames, 32);
+    if (n == 0) { printf("未检测到物理网卡！\n"); return; }
+    printf("请选择要添加IP的网卡：\n");
+    int i;
+    for (i = 0; i < n; ++i) printf("%d) %s\n", i+1, ifnames[i]);
+    int sel = 0;
+    printf("输入序号: ");
+    scanf("%d", &sel);
+    if (sel < 1 || sel > n) { printf("无效选择！\n"); return; }
+    printf("你选择的网卡是: %s\n", ifnames[sel-1]);
+    // 输入IP
+    char ip[64] = {0}, mask[64] = {0};
+    printf("请输入新IP地址 (支持 1.1.1.1/24 或 1.1.1.1): ");
+    scanf("%63s", ip);
+    char *slash = strchr(ip, '/');
+    if (slash) {
+        // 1.1.1.1/24
+        *slash = '\0';
+        int masklen = atoi(slash+1);
+        if (!is_valid_ip(ip) || masklen < 0 || masklen > 32) {
+            printf("IP或掩码格式错误！\n"); return;
+        }
+        masklen_to_str(masklen, mask);
+        printf("输入的IP: %s, 掩码: %s\n", ip, mask);
+    } else {
+        if (!is_valid_ip(ip)) { printf("IP格式错误！\n"); return; }
+        printf("请输入子网掩码 (如 255.255.255.0): ");
+        scanf("%63s", mask);
+        if (!is_valid_mask(mask)) { printf("掩码格式错误！\n"); return; }
+        printf("输入的IP: %s, 掩码: %s\n", ip, mask);
+    }
+    do_add_ip(ifnames[sel-1], ip, mask);
+}
+
 // 网卡IP信息列表功能
 void list_ip_config() {
     printf("========== 网卡配置信息 ==========\n");
@@ -713,9 +1005,10 @@ void list_ip_config() {
     if (fp) pclose(fp);
     printf("当前默认网关是：%s，别删除网关的同段IP\n", gw[0] ? gw : "未知");
 
-    // 列出所有网卡及IP
+    // 收集所有网卡及IP，按网卡名分组
     struct ifaddrs *ifaddr, *ifa;
-    int idx = 1;
+    struct ip_entry { char ifname[IFNAMSIZ]; char ip[64]; } iplist[128];
+    int ipcount = 0;
     if (getifaddrs(&ifaddr) == -1) {
         perror("getifaddrs");
         return;
@@ -724,34 +1017,75 @@ void list_ip_config() {
         if (ifa->ifa_addr == NULL) continue;
         if (ifa->ifa_addr->sa_family == AF_INET) {
             struct sockaddr_in *sa = (struct sockaddr_in *)ifa->ifa_addr;
-            printf(" %d. 网卡: %s\n", idx, ifa->ifa_name);
-            printf("    IP地址: %s\n", inet_ntoa(sa->sin_addr));
-            printf(" --------------------------\n");
-            idx++;
+            strncpy(iplist[ipcount].ifname, ifa->ifa_name, IFNAMSIZ);
+            strncpy(iplist[ipcount].ip, inet_ntoa(sa->sin_addr), 63);
+            iplist[ipcount].ip[63] = '\0';
+            ipcount++;
         }
     }
-    // 还要列出没有IP的网卡
-    for (ifa = ifaddr; ifa != NULL; ifa = ifa->ifa_next) {
-        if (ifa->ifa_addr == NULL) continue;
-        if (ifa->ifa_addr->sa_family == AF_PACKET) {
-            // 检查该网卡是否已在上面列出
-            int found = 0;
-            struct ifaddrs *ifa2;
-            for (ifa2 = ifaddr; ifa2 != NULL; ifa2 = ifa2->ifa_next) {
-                if (ifa2->ifa_addr && ifa2->ifa_addr->sa_family == AF_INET && strcmp(ifa2->ifa_name, ifa->ifa_name) == 0) {
-                    found = 1; break;
-                }
-            }
-            if (!found) {
-                printf(" %d. 网卡: %s\n", idx, ifa->ifa_name);
-                printf(" --------------------------\n");
-                idx++;
+    // 获取所有物理网卡名
+    char ifnames[32][IFNAMSIZ];
+    int n = get_all_ifnames(ifnames, 32);
+    // lo放第一个，其余排序
+    int i, j;
+    for (i = 0; i < n; ++i) {
+        if (strcmp(ifnames[i], "lo") == 0 && i != 0) {
+            char tmp[IFNAMSIZ];
+            strcpy(tmp, ifnames[0]);
+            strcpy(ifnames[0], ifnames[i]);
+            strcpy(ifnames[i], tmp);
+            break;
+        }
+    }
+    for (i = 1; i < n-1; ++i) {
+        for (j = i+1; j < n; ++j) {
+            if (strcmp(ifnames[i], ifnames[j]) > 0) {
+                char tmp[IFNAMSIZ];
+                strcpy(tmp, ifnames[i]);
+                strcpy(ifnames[i], ifnames[j]);
+                strcpy(ifnames[j], tmp);
             }
         }
+    }
+    // 显示，序号连续，每个网卡聚合所有IP，没有IP的网卡也显示
+    int idx = 1;
+    for (i = 0; i < n; ++i) {
+        printf("%2d. 网卡: %s\n", idx++, ifnames[i]);
+        int has_ip = 0;
+        for (j = 0; j < ipcount; ++j) {
+            if (strcmp(ifnames[i], iplist[j].ifname) == 0) {
+                printf("    IP地址: %s\n", iplist[j].ip);
+                has_ip = 1;
+            }
+        }
+        if (!has_ip) {
+            printf("    (无IP)\n");
+        }
+        printf(" --------------------------\n");
     }
     freeifaddrs(ifaddr);
     printf("======== 请选择需要的操作 ========\n");
     printf("1) 添加\n2) 删除\n3) 替换\n4) 退出\n");
+    char select;
+    printf("请选择一个选项: ");
+    scanf(" %c", &select);
+    switch (select) {
+        case '1':
+            add_ip();
+            break;
+        case '2':
+            // 删除IP的实现
+            break;
+        case '3':
+            // 替换IP的实现
+            break;
+        case '4':
+            // 退出
+            break;
+        default:
+            printf("❗ 未知选项，请重新选择。\n");
+            break;
+    }
 }
 
 // 菜单界面与用户交互
