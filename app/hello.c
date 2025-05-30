@@ -9,6 +9,11 @@
 #include <string.h>
 #include <ctype.h>
 #include <math.h>
+#include <sys/sysinfo.h>   // 用于获取开机时间
+#include <ifaddrs.h>       // 用于获取IP
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
 
 #define MAX_LINE 256
 
@@ -19,7 +24,7 @@ typedef struct {
 } DistributionInfo;
 
 // 全局系统信息
-struct utsname sysinfo;
+struct utsname global_sysinfo;
 
 // 工具函数：检查目录是否存在
 int directory_exists(const char *path) {
@@ -260,8 +265,7 @@ void print_distribution_info() {
 
 // 显示内核和主机名信息
 void print_kernel_and_hostname() {
-    printf("        内核版本: %s\n", sysinfo.release);
-    printf("        主机名称: %s\n", sysinfo.nodename);
+    printf("        内核版本: %s %s\n", global_sysinfo.sysname, global_sysinfo.release);
 }
 
 // 显示CPU 型号和逻辑核心数
@@ -378,11 +382,61 @@ void print_memory_info() {
            rounded_total, rounded_used, percent);
 }
 
+// 获取系统开机时间（返回字符串，需free）
+char* get_uptime_str() {
+    struct sysinfo info;
+    if (sysinfo(&info) != 0) {
+        return strdup("未知");
+    }
+    int days = info.uptime / (60*60*24);
+    int hours = (info.uptime % (60*60*24)) / 3600;
+    int minutes = (info.uptime % 3600) / 60;
+    int seconds = info.uptime % 60;
+    char *buf = malloc(128);
+    if (!buf) return strdup("内存不足");
+    snprintf(buf, 128, "%d天 %02d:%02d:%02d", days, hours, minutes, seconds);
+    return buf;
+}
 
+// 打印系统开机时间
+void print_uptime() {
+    char *uptime = get_uptime_str();
+    printf("        开机时长: %s\n", uptime);
+    free(uptime);
+}
+
+// 获取本机第一个非127.0.0.1的IPv4地址（返回字符串，需free）
+char* get_local_ip() {
+    struct ifaddrs *ifaddr, *ifa;
+    char *ip = NULL;
+    if (getifaddrs(&ifaddr) == -1) {
+        return strdup("未知");
+    }
+    for (ifa = ifaddr; ifa != NULL; ifa = ifa->ifa_next) {
+        if (ifa->ifa_addr == NULL) continue;
+        if (ifa->ifa_addr->sa_family == AF_INET) {
+            struct sockaddr_in *sa = (struct sockaddr_in *)ifa->ifa_addr;
+            if (strcmp(ifa->ifa_name, "lo") != 0) {
+                ip = strdup(inet_ntoa(sa->sin_addr));
+                break;
+            }
+        }
+    }
+    freeifaddrs(ifaddr);
+    if (!ip) return strdup("未获取到IP");
+    return ip;
+}
+
+// 打印本机IP
+void print_local_ip() {
+    char *ip = get_local_ip();
+    printf("        本机IP: %s\n", ip);
+    free(ip);
+}
 
 // 显示系统信息主函数
 void system_info() {
-    if (uname(&sysinfo) == -1) {
+    if (uname(&global_sysinfo) == -1) {
         perror("uname");
         return;
     }
@@ -394,6 +448,10 @@ void system_info() {
     print_cpu_info();
     print_memory_info();
     
+    printf("        \n");  
+    printf("        主机名称: %s\n", global_sysinfo.nodename);
+    print_local_ip();
+    print_uptime();
 }
 
 // 功能示例：功能一
