@@ -454,9 +454,249 @@ void system_info() {
     print_uptime();
 }
 
+// 修改YUM源和APT源的函数
+void change_package_source() {
+    DistributionInfo distro_info;
+    if (get_distribution_info(&distro_info) != 0) {
+        printf("无法识别系统类型，无法自动更换源。\n");
+        return;
+    }
+    printf("检测到系统: %s %s\n", distro_info.name, distro_info.version);
+
+    // Ubuntu/Debian 系列
+    if (strstr(distro_info.name, "Ubuntu") || strstr(distro_info.name, "Debian")) {
+        printf("正在备份并更换APT源...\n");
+        system("cp /etc/apt/sources.list /etc/apt/sources.list.bak 2>/dev/null");
+        // 选择阿里云源
+        FILE *fp = fopen("/etc/apt/sources.list", "w");
+        if (!fp) {
+            printf("无法写入 /etc/apt/sources.list\n");
+            return;
+        }
+        if (strstr(distro_info.name, "Ubuntu")) {
+            // 适配不同版本
+            const char *ver = distro_info.version;
+            char *source_content;
+            if (strstr(ver, "14")) {
+                source_content =
+                    "deb https://mirrors.aliyun.com/ubuntu/ trusty main restricted universe multiverse\n"
+                    "deb-src https://mirrors.aliyun.com/ubuntu/ trusty main restricted universe multiverse\n"
+                    "deb https://mirrors.aliyun.com/ubuntu/ trusty-security main restricted universe multiverse\n"
+                    "deb-src https://mirrors.aliyun.com/ubuntu/ trusty-security main restricted universe multiverse\n"
+                    "deb https://mirrors.aliyun.com/ubuntu/ trusty-updates main restricted universe multiverse\n"
+                    "deb-src https://mirrors.aliyun.com/ubuntu/ trusty-updates main restricted universe multiverse\n"
+                    "deb https://mirrors.aliyun.com/ubuntu/ trusty-backports main restricted universe multiverse\n"
+                    "deb-src https://mirrors.aliyun.com/ubuntu/ trusty-backports main restricted universe multiverse\n";
+            } else if (strstr(ver, "16")) {
+                source_content =
+                    "deb https://mirrors.aliyun.com/ubuntu/ xenial main\n"
+                    "deb-src https://mirrors.aliyun.com/ubuntu/ xenial main\n"
+                    "deb https://mirrors.aliyun.com/ubuntu/ xenial-updates main\n"
+                    "deb-src https://mirrors.aliyun.com/ubuntu/ xenial-updates main\n"
+                    "deb https://mirrors.aliyun.com/ubuntu/ xenial universe\n"
+                    "deb-src https://mirrors.aliyun.com/ubuntu/ xenial universe\n"
+                    "deb https://mirrors.aliyun.com/ubuntu/ xenial-updates universe\n"
+                    "deb-src https://mirrors.aliyun.com/ubuntu/ xenial-updates universe\n"
+                    "deb https://mirrors.aliyun.com/ubuntu/ xenial-security main\n"
+                    "deb-src https://mirrors.aliyun.com/ubuntu/ xenial-security main\n"
+                    "deb https://mirrors.aliyun.com/ubuntu/ xenial-security universe\n"
+                    "deb-src https://mirrors.aliyun.com/ubuntu/ xenial-security universe\n";
+            } else if (strstr(ver, "18")) {
+                source_content =
+                    "deb https://mirrors.aliyun.com/ubuntu/ bionic main restricted universe multiverse\n"
+                    "deb-src https://mirrors.aliyun.com/ubuntu/ bionic main restricted universe multiverse\n"
+                    "deb https://mirrors.aliyun.com/ubuntu/ bionic-security main restricted universe multiverse\n"
+                    "deb-src https://mirrors.aliyun.com/ubuntu/ bionic-security main restricted universe multiverse\n"
+                    "deb https://mirrors.aliyun.com/ubuntu/ bionic-updates main restricted universe multiverse\n"
+                    "deb-src https://mirrors.aliyun.com/ubuntu/ bionic-updates main restricted universe multiverse\n"
+                    "deb https://mirrors.aliyun.com/ubuntu/ bionic-backports main restricted universe multiverse\n"
+                    "deb-src https://mirrors.aliyun.com/ubuntu/ bionic-backports main restricted universe multiverse\n";
+            } else if (strstr(ver, "20")) {
+                source_content =
+                    "deb https://mirrors.aliyun.com/ubuntu/ focal main restricted universe multiverse\n"
+                    "deb-src https://mirrors.aliyun.com/ubuntu/ focal main restricted universe multiverse\n"
+                    "deb https://mirrors.aliyun.com/ubuntu/ focal-security main restricted universe multiverse\n"
+                    "deb-src https://mirrors.aliyun.com/ubuntu/ focal-security main restricted universe multiverse\n"
+                    "deb https://mirrors.aliyun.com/ubuntu/ focal-updates main restricted universe multiverse\n"
+                    "deb-src https://mirrors.aliyun.com/ubuntu/ focal-updates main restricted universe multiverse\n"
+                    "deb https://mirrors.aliyun.com/ubuntu/ focal-backports main restricted universe multiverse\n"
+                    "deb-src https://mirrors.aliyun.com/ubuntu/ focal-backports main restricted universe multiverse\n";
+            } else if (strstr(ver, "22")) {
+                source_content =
+                    "deb https://mirrors.aliyun.com/ubuntu/ jammy main restricted universe multiverse\n"
+                    "deb-src https://mirrors.aliyun.com/ubuntu/ jammy main restricted universe multiverse\n"
+                    "deb https://mirrors.aliyun.com/ubuntu/ jammy-security main restricted universe multiverse\n"
+                    "deb-src https://mirrors.aliyun.com/ubuntu/ jammy-security main restricted universe multiverse\n"
+                    "deb https://mirrors.aliyun.com/ubuntu/ jammy-updates main restricted universe multiverse\n"
+                    "deb-src https://mirrors.aliyun.com/ubuntu/ jammy-updates main restricted universe multiverse\n"
+                    "deb https://mirrors.aliyun.com/ubuntu/ jammy-backports main restricted universe multiverse\n"
+                    "deb-src https://mirrors.aliyun.com/ubuntu/ jammy-backports main restricted universe multiverse\n";
+            } else if (strstr(ver, "23")) {
+                source_content =
+                    "deb https://mirrors.aliyun.com/ubuntu/ lunar main restricted universe multiverse\n"
+                    "deb-src https://mirrors.aliyun.com/ubuntu/ lunar main restricted universe multiverse\n"
+                    "deb https://mirrors.aliyun.com/ubuntu/ lunar-security main restricted universe multiverse\n"
+                    "deb-src https://mirrors.aliyun.com/ubuntu/ lunar-security main restricted universe multiverse\n"
+                    "deb https://mirrors.aliyun.com/ubuntu/ lunar-updates main restricted universe multiverse\n"
+                    "deb-src https://mirrors.aliyun.com/ubuntu/ lunar-updates main restricted universe multiverse\n"
+                    "deb https://mirrors.aliyun.com/ubuntu/ lunar-backports main restricted universe multiverse\n"
+                    "deb-src https://mirrors.aliyun.com/ubuntu/ lunar-backports main restricted universe multiverse\n";
+            } else if (strstr(ver, "24")) {
+                source_content =
+                    "deb https://mirrors.aliyun.com/ubuntu/ noble main restricted universe multiverse\n"
+                    "deb-src https://mirrors.aliyun.com/ubuntu/ noble main restricted universe multiverse\n"
+                    "deb https://mirrors.aliyun.com/ubuntu/ noble-security main restricted universe multiverse\n"
+                    "deb-src https://mirrors.aliyun.com/ubuntu/ noble-security main restricted universe multiverse\n"
+                    "deb https://mirrors.aliyun.com/ubuntu/ noble-updates main restricted universe multiverse\n"
+                    "deb-src https://mirrors.aliyun.com/ubuntu/ noble-updates main restricted universe multiverse\n"
+                    "deb https://mirrors.aliyun.com/ubuntu/ noble-backports main restricted universe multiverse\n"
+                    "deb-src https://mirrors.aliyun.com/ubuntu/ noble-backports main restricted universe multiverse\n";
+            } else {
+                // 默认 fallback
+                source_content =
+                    "deb https://mirrors.aliyun.com/ubuntu/ focal main restricted universe multiverse\n"
+                    "deb-src https://mirrors.aliyun.com/ubuntu/ focal main restricted universe multiverse\n"
+                    "deb https://mirrors.aliyun.com/ubuntu/ focal-security main restricted universe multiverse\n"
+                    "deb-src https://mirrors.aliyun.com/ubuntu/ focal-security main restricted universe multiverse\n"
+                    "deb https://mirrors.aliyun.com/ubuntu/ focal-updates main restricted universe multiverse\n"
+                    "deb-src https://mirrors.aliyun.com/ubuntu/ focal-updates main restricted universe multiverse\n"
+                    "deb https://mirrors.aliyun.com/ubuntu/ focal-backports main restricted universe multiverse\n"
+                    "deb-src https://mirrors.aliyun.com/ubuntu/ focal-backports main restricted universe multiverse\n";
+            }
+            fprintf(fp, "%s", source_content);
+        } else {
+            // Debian
+            const char *ver = distro_info.version;
+            const char *debian_content = NULL;
+            if (strstr(ver, "7")) {
+                debian_content =
+                    "deb https://mirrors.aliyun.com/debian-archive/debian/ wheezy main non-free contrib\n"
+                    "#deb https://mirrors.aliyun.com/debian-archive/debian/ wheezy-proposed-updates main non-free contrib\n"
+                    "deb-src https://mirrors.aliyun.com/debian-archive/debian/ wheezy main non-free contrib\n"
+                    "#deb-src https://mirrors.aliyun.com/debian-archive/debian/ wheezy-proposed-updates main non-free contrib\n";
+            } else if (strstr(ver, "8")) {
+                debian_content =
+                    "deb https://mirrors.aliyun.com/debian-archive/debian/ jessie main non-free contrib\n"
+                    "deb-src https://mirrors.aliyun.com/debian-archive/debian/ jessie main non-free contrib\n";
+            } else if (strstr(ver, "9")) {
+                debian_content =
+                    "deb https://mirrors.aliyun.com/debian-archive/debian stretch main contrib non-free\n"
+                    "#deb https://mirrors.aliyun.com/debian-archive/debian stretch-proposed-updates main non-free contrib\n"
+                    "#deb https://mirrors.aliyun.com/debian-archive/debian stretch-backports main non-free contrib\n"
+                    "deb https://mirrors.aliyun.com/debian-archive/debian-security stretch/updates main contrib non-free\n"
+                    "deb-src https://mirrors.aliyun.com/debian-archive/debian stretch main contrib non-free\n"
+                    "#deb-src https://mirrors.aliyun.com/debian-archive/debian stretch-proposed-updates main contrib non-free\n"
+                    "#deb-src https://mirrors.aliyun.com/debian-archive/debian stretch-backports main contrib non-free\n"
+                    "deb-src https://mirrors.aliyun.com/debian-archive/debian-security stretch/updates main contrib non-free\n";
+            } else if (strstr(ver, "10")) {
+                debian_content =
+                    "deb https://mirrors.aliyun.com/debian/ buster main non-free contrib\n"
+                    "deb-src https://mirrors.aliyun.com/debian/ buster main non-free contrib\n"
+                    "deb https://mirrors.aliyun.com/debian-security buster/updates main\n"
+                    "deb-src https://mirrors.aliyun.com/debian-security buster/updates main\n"
+                    "deb https://mirrors.aliyun.com/debian/ buster-updates main non-free contrib\n"
+                    "deb-src https://mirrors.aliyun.com/debian/ buster-updates main non-free contrib\n";
+            } else if (strstr(ver, "11")) {
+                debian_content =
+                    "deb https://mirrors.aliyun.com/debian/ bullseye main non-free contrib\n"
+                    "deb-src https://mirrors.aliyun.com/debian/ bullseye main non-free contrib\n"
+                    "deb https://mirrors.aliyun.com/debian-security/ bullseye-security main\n"
+                    "deb-src https://mirrors.aliyun.com/debian-security/ bullseye-security main\n"
+                    "deb https://mirrors.aliyun.com/debian/ bullseye-updates main non-free contrib\n"
+                    "deb-src https://mirrors.aliyun.com/debian/ bullseye-updates main non-free contrib\n"
+                    "deb https://mirrors.aliyun.com/debian/ bullseye-backports main non-free contrib\n"
+                    "deb-src https://mirrors.aliyun.com/debian/ bullseye-backports main non-free contrib\n";
+            } else if (strstr(ver, "12")) {
+                debian_content =
+                    "deb http://mirrors.aliyun.com/debian/ bookworm main contrib non-free\n"
+                    "deb http://mirrors.aliyun.com/debian/ bookworm-updates main contrib non-free\n"
+                    "deb http://mirrors.aliyun.com/debian-security bookworm-security main contrib non-free\n"
+                    "deb http://mirrors.aliyun.com/debian/ bookworm-backports main contrib non-free\n";
+            } else {
+                debian_content =
+                    "deb http://mirrors.aliyun.com/debian/ bullseye main contrib non-free\n"
+                    "deb http://mirrors.aliyun.com/debian/ bullseye-updates main contrib non-free\n"
+                    "deb http://mirrors.aliyun.com/debian-security bullseye-security main contrib non-free\n"
+                    "deb http://mirrors.aliyun.com/debian/ bullseye-backports main contrib non-free\n";
+            }
+            // 先读取原内容
+            FILE *oldfp = fopen("/etc/apt/sources.list", "r");
+            char *old_content = NULL;
+            size_t old_size = 0;
+            if (oldfp) {
+                fseek(oldfp, 0, SEEK_END);
+                old_size = ftell(oldfp);
+                fseek(oldfp, 0, SEEK_SET);
+                old_content = malloc(old_size + 1);
+                if (old_content) {
+                    fread(old_content, 1, old_size, oldfp);
+                    old_content[old_size] = '\0';
+                }
+                fclose(oldfp);
+            }
+            // 覆盖写入新内容+原内容
+            fp = fopen("/etc/apt/sources.list", "w");
+            if (fp) {
+                fprintf(fp, "%s", debian_content);
+                if (old_content) fprintf(fp, "%s", old_content);
+                fclose(fp);
+            }
+            if (old_content) free(old_content);
+        }
+        printf("APT源已切换为阿里云，正在更新缓存...\n");
+        system("apt update");
+        printf("APT源已切换并更新完成。\n");
+        return;
+    }
+
+    // CentOS/RHEL 系列
+    if (strstr(distro_info.name, "CentOS") || strstr(distro_info.name, "Red Hat") || strstr(distro_info.name, "RHEL")) {
+        printf("正在备份并更换YUM源...\n");
+        system("mkdir -p /etc/yum.repos.d/backup && mv /etc/yum.repos.d/*.repo /etc/yum.repos.d/backup/ 2>/dev/null");
+        char cmd[512] = {0};
+        int has_wget = (system("command -v wget > /dev/null 2>&1") == 0);
+        int has_curl = (system("command -v curl > /dev/null 2>&1") == 0);
+        const char *repo_url = NULL;
+        const char *repo_cmd = NULL;
+        const char *ver = distro_info.version;
+        if (strstr(ver, "6")) {
+            repo_url = "https://mirrors.aliyun.com/repo/Centos-vault-6.10.repo";
+        } else if (strstr(ver, "7")) {
+            repo_url = "https://mirrors.aliyun.com/repo/Centos-7.repo";
+        } else if (strstr(ver, "8")) {
+            repo_url = "https://mirrors.aliyun.com/repo/Centos-vault-8.5.2111.repo";
+        } else if (strstr(ver, "9")) {
+            repo_url = "http://mirrors.aliyun.com/repo/Centos-9.repo";
+        } else {
+            repo_url = "https://mirrors.aliyun.com/repo/Centos-7.repo";
+        }
+        if (has_wget) {
+            snprintf(cmd, sizeof(cmd), "wget -O /etc/yum.repos.d/CentOS-Base.repo %s", repo_url);
+        } else if (has_curl) {
+            snprintf(cmd, sizeof(cmd), "curl -o /etc/yum.repos.d/CentOS-Base.repo %s", repo_url);
+        } else {
+            printf("未检测到wget或curl命令，无法下载YUM源配置文件！\n");
+            return;
+        }
+        system(cmd);
+        printf("YUM源已切换为阿里云，正在清理并生成缓存...\n");
+        system("yum clean all && yum makecache");
+        printf("YUM源已切换并缓存更新完成。\n");
+        return;
+    }
+
+    printf("暂不支持该系统自动换源，请手动处理。\n");
+}
+
 // 功能示例：功能一
 void feature_1() {
     printf("👉 功能 1 已执行。\n");
+}
+
+// 功能三：修改源
+void feature_3() {
+    printf("👉 功能 3：自动更换YUM/APT源\n");
+    change_package_source();
 }
 
 // 菜单界面与用户交互
@@ -467,7 +707,7 @@ static void menu() {
         printf("   \e[1;35m0、显示系统信息\e[0m\n");
         printf("   \e[1;35m1、功能一\e[0m\n");
         printf("   \e[1;35m2、功能二\e[0m\n");
-        printf("   \e[1;35m3、功能三\e[0m\n");
+        printf("   \e[1;35m3、自动更换YUM/APT源\e[0m\n");
         printf("   \e[1;35m4、功能四\e[0m\n");
         printf("   \e[1;35m5、功能五\e[0m\n");
         printf("   \e[1;35m6、功能六\e[0m\n");
@@ -482,6 +722,24 @@ static void menu() {
                 break;
             case '1':
                 feature_1();
+                break;
+            case '2':
+                // 功能二的实现
+                break;
+            case '3':
+                feature_3();
+                break;
+            case '4':
+                // 功能四的实现
+                break;
+            case '5':
+                // 功能五的实现
+                break;
+            case '6':
+                // 功能六的实现
+                break;
+            case '7':
+                // 功能七的实现
                 break;
             case 'q':
             case 'Q':
