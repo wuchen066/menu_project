@@ -14,6 +14,8 @@
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
+#include <net/if.h>
+#include <linux/if_link.h>
 
 #define MAX_LINE 256
 
@@ -657,7 +659,6 @@ void change_package_source() {
         int has_wget = (system("command -v wget > /dev/null 2>&1") == 0);
         int has_curl = (system("command -v curl > /dev/null 2>&1") == 0);
         const char *repo_url = NULL;
-        const char *repo_cmd = NULL;
         const char *ver = distro_info.version;
         if (strstr(ver, "6")) {
             repo_url = "https://mirrors.aliyun.com/repo/Centos-vault-6.10.repo";
@@ -666,7 +667,8 @@ void change_package_source() {
         } else if (strstr(ver, "8")) {
             repo_url = "https://mirrors.aliyun.com/repo/Centos-vault-8.5.2111.repo";
         } else if (strstr(ver, "9")) {
-            repo_url = "http://mirrors.aliyun.com/repo/Centos-9.repo";
+            printf("该系统目前无阿里云源，请手动处理。\n");
+            return;
         } else {
             repo_url = "https://mirrors.aliyun.com/repo/Centos-7.repo";
         }
@@ -699,13 +701,66 @@ void feature_3() {
     change_package_source();
 }
 
+// 网卡IP信息列表功能
+void list_ip_config() {
+    printf("========== 网卡配置信息 ==========\n");
+    // 获取默认网关
+    char gw[64] = "";
+    FILE *fp = popen("ip route | grep default | awk '{print $3}'", "r");
+    if (fp && fgets(gw, sizeof(gw), fp)) {
+        gw[strcspn(gw, "\n")] = '\0';
+    }
+    if (fp) pclose(fp);
+    printf("当前默认网关是：%s，别删除网关的同段IP\n", gw[0] ? gw : "未知");
+
+    // 列出所有网卡及IP
+    struct ifaddrs *ifaddr, *ifa;
+    int idx = 1;
+    if (getifaddrs(&ifaddr) == -1) {
+        perror("getifaddrs");
+        return;
+    }
+    for (ifa = ifaddr; ifa != NULL; ifa = ifa->ifa_next) {
+        if (ifa->ifa_addr == NULL) continue;
+        if (ifa->ifa_addr->sa_family == AF_INET) {
+            struct sockaddr_in *sa = (struct sockaddr_in *)ifa->ifa_addr;
+            printf(" %d. 网卡: %s\n", idx, ifa->ifa_name);
+            printf("    IP地址: %s\n", inet_ntoa(sa->sin_addr));
+            printf(" --------------------------\n");
+            idx++;
+        }
+    }
+    // 还要列出没有IP的网卡
+    for (ifa = ifaddr; ifa != NULL; ifa = ifa->ifa_next) {
+        if (ifa->ifa_addr == NULL) continue;
+        if (ifa->ifa_addr->sa_family == AF_PACKET) {
+            // 检查该网卡是否已在上面列出
+            int found = 0;
+            struct ifaddrs *ifa2;
+            for (ifa2 = ifaddr; ifa2 != NULL; ifa2 = ifa2->ifa_next) {
+                if (ifa2->ifa_addr && ifa2->ifa_addr->sa_family == AF_INET && strcmp(ifa2->ifa_name, ifa->ifa_name) == 0) {
+                    found = 1; break;
+                }
+            }
+            if (!found) {
+                printf(" %d. 网卡: %s\n", idx, ifa->ifa_name);
+                printf(" --------------------------\n");
+                idx++;
+            }
+        }
+    }
+    freeifaddrs(ifaddr);
+    printf("======== 请选择需要的操作 ========\n");
+    printf("1) 添加\n2) 删除\n3) 替换\n4) 退出\n");
+}
+
 // 菜单界面与用户交互
 static void menu() {
     char select;
     while (true) {
         printf("\n\e[1;35m警告：非新环境中请勿使用 'yum update'\e[0m\n");
         printf("   \e[1;35m0、显示系统信息\e[0m\n");
-        printf("   \e[1;35m1、功能一\e[0m\n");
+        printf("   \e[1;35m1、IP增删改查\e[0m\n");
         printf("   \e[1;35m2、功能二\e[0m\n");
         printf("   \e[1;35m3、自动更换YUM/APT源\e[0m\n");
         printf("   \e[1;35m4、功能四\e[0m\n");
@@ -721,7 +776,7 @@ static void menu() {
                 system_info();
                 break;
             case '1':
-                feature_1();
+                list_ip_config();
                 break;
             case '2':
                 // 功能二的实现
