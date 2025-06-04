@@ -647,7 +647,10 @@ void change_package_source() {
             if (old_content) free(old_content);
         }
         printf("APT源已切换为阿里云，正在更新缓存...\n");
-        system("apt update");
+        int ret = system("apt update > /dev/null 2>&1");
+        if (ret != 0) {
+            printf("APT源更新失败，请检查网络连接或手动更新。\n");
+        }
         printf("APT源已切换并更新完成。\n");
         return;
     }
@@ -683,7 +686,10 @@ void change_package_source() {
         }
         system(cmd);
         printf("YUM源已切换为阿里云，正在清理并生成缓存...\n");
-        system("yum clean all && yum makecache");
+        int ret = system("yum clean all > /dev/null 2>&1 && yum makecache > /dev/null 2>&1");
+        if (ret != 0) {
+            printf("YUM源清理和缓存生成失败，请检查网络连接或手动处理。\n");
+        }
         printf("YUM源已切换并缓存更新完成。\n");
         return;
     }
@@ -1108,7 +1114,7 @@ static void menu() {
         switch (select) {
             case '0':
                 system_info();
-                break;
+                return;
             case '1':
                 list_ip_config();
                 break;
@@ -1140,10 +1146,10 @@ static void menu() {
         }
 
         // 按回车继续
-        printf("\n按 Enter 键继续...");
-        while (getchar() != '\n'); // 清空输入缓冲
-        getchar();                 // 等待按下回车
-        printf("\033[H\033[J");     // 清屏（可选）
+        // printf("\n按 Enter 键继续...");
+        // while (getchar() != '\n'); // 清空输入缓冲
+        // getchar();                 // 等待按下回车
+        // printf("\033[H\033[J");     // 清屏（可选）
     }
 }
 
