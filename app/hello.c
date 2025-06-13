@@ -14,9 +14,9 @@
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
-#include <net/if.h>
 #include <linux/if_link.h>
 #include <regex.h>
+#include <libnl3/netlink/netlink-compat.h>
 
 #define MAX_LINE 256
 
