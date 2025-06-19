@@ -741,6 +741,8 @@ int get_all_ifnames(char names[][IFNAMSIZ], int max) {
     return count;
 }
 
+
+
 // 掩码长度转点分十进制
 void masklen_to_str(int masklen, char *out) {
     unsigned int mask = masklen == 0 ? 0 : 0xFFFFFFFF << (32 - masklen);
@@ -999,6 +1001,66 @@ void add_ip() {
     do_add_ip(ifnames[sel-1], ip, mask);
 }
 
+void do_delete_ip(const char *ifname, const char *del_ip) {
+    printf("删除的IP: %s\n", del_ip);
+}
+
+void delete_ip() {
+    char ifnames[32][IFNAMSIZ];
+    int n = get_all_ifnames(ifnames, 32);
+    if (n == 0) { printf("未检测到物理网卡！\n"); return; }
+    int i;
+    for (i = 0; i < n; ++i) printf("%d) %s\n", i+1, ifnames[i]);
+    int sel;
+    printf("请输入需要删除IP的网卡: ");
+    scanf("%d", &sel);
+    if (sel < 1 || sel > n) { printf("无效选择！\n"); return; }
+    const char *ifname = ifnames[sel-1];
+    printf("你选择的网卡是: %s\n", ifname);
+
+    // 1. 获取该网卡所有IP
+    struct ifaddrs *ifaddr, *ifa;
+    char ips[16][64];
+    int ip_count = 0;
+    if (getifaddrs(&ifaddr) == -1) {
+        perror("getifaddrs");
+        return;
+    }
+    for (ifa = ifaddr; ifa != NULL; ifa = ifa->ifa_next) {
+        if (ifa->ifa_addr == NULL) continue;
+        if (ifa->ifa_addr->sa_family == AF_INET && strcmp(ifa->ifa_name, ifname) == 0) {
+            struct sockaddr_in *sa = (struct sockaddr_in *)ifa->ifa_addr;
+            strncpy(ips[ip_count], inet_ntoa(sa->sin_addr), 63);
+            ips[ip_count][63] = '\0';
+            ip_count++;
+        }
+    }
+    freeifaddrs(ifaddr);
+
+    if (ip_count == 0) {
+        printf("该网卡没有IP可删除！\n");
+        return;
+    }
+
+    // 2. 列出所有IP供选择
+    for (i = 0; i < ip_count; ++i) {
+        printf("%d) %s\n", i+1, ips[i]);
+    }
+    int ip_sel;
+    printf("请输入要删除的IP序号: ");
+    scanf("%d", &ip_sel);
+    if (ip_sel < 1 || ip_sel > ip_count) {
+        printf("无效选择！\n");
+        return;
+    }
+    const char *del_ip = ips[ip_sel-1];
+    printf("你选择删除的IP是: %s\n", del_ip);
+
+    // 3. 查找配置文件并删除对应IP和掩码
+     do_delete_ip(ifname, del_ip);
+}
+
+
 // 网卡IP信息列表功能
 void list_ip_config() {
     printf("========== 网卡配置信息 ==========\n");
@@ -1077,13 +1139,15 @@ void list_ip_config() {
     scanf(" %c", &select);
     switch (select) {
         case '1':
+            // 添加IP
             add_ip();
             break;
         case '2':
-            // 删除IP的实现
+            // 删除IP
+            delete_ip();
             break;
         case '3':
-            // 替换IP的实现
+            // 替换IP
             break;
         case '4':
             // 退出
