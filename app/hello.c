@@ -1002,7 +1002,152 @@ void add_ip() {
 }
 
 void do_delete_ip(const char *ifname, const char *del_ip) {
-    printf("删除的IP: %s\n", del_ip);
+    // 检查 NetworkManager 是否 running
+    int is_nm_running = (system("systemctl is-active --quiet NetworkManager") == 0);
+    if (is_nm_running) {
+        // 查找 connection 名称
+        char con_name[128] = "";
+        char nmcli_query_cmd[256];
+        snprintf(nmcli_query_cmd, sizeof(nmcli_query_cmd), "nmcli -g GENERAL.CONNECTION device show %s 2>/dev/null", ifname);
+        FILE *con_fp = popen(nmcli_query_cmd, "r");
+        if (con_fp) {
+            if (fgets(con_name, sizeof(con_name), con_fp)) {
+                con_name[strcspn(con_name, "\n")] = '\0';
+            }
+            pclose(con_fp);
+        }
+        if (strlen(con_name) > 0 && strcmp(con_name, "--") != 0) {
+            // nmcli 删除IP
+            char nmcli_cmd[512];
+            snprintf(nmcli_cmd, sizeof(nmcli_cmd), "nmcli connection modify '%s' -ipv4.addresses %s", con_name, del_ip);
+            printf("检测到 NetworkManager 正在运行，推荐使用 nmcli 删除：\n%s\n", nmcli_cmd);
+            int ret = system(nmcli_cmd);
+            if (ret == 0) {
+                char up_cmd[256];
+                snprintf(up_cmd, sizeof(up_cmd), "nmcli connection up '%s' || ifup %s", con_name, ifname);
+                printf("正在激活连接: %s\n", up_cmd);
+                system(up_cmd);
+                printf("IP 已通过 nmcli 删除并激活。\n");
+                return;
+            } else {
+                printf("nmcli 删除失败，建议用 'nmcli connection show' 查看所有连接名，并手动配置。\n");
+            }
+        } else {
+            printf("未找到网卡 %s 的 NetworkManager 连接名，自动切换为配置文件方式。\n", ifname);
+        }
+    }
+    // 检测系统类型
+    FILE *fp = fopen("/etc/os-release", "r");
+    char osid[64] = "", line[256];
+    if (fp) {
+        while (fgets(line, sizeof(line), fp)) {
+            if (strncmp(line, "ID=", 3) == 0) {
+                sscanf(line, "ID=%63s", osid);
+                size_t len = strlen(osid);
+                if (osid[0] == '"' || osid[0] == '\'') memmove(osid, osid+1, len-1);
+                if (osid[strlen(osid)-1] == '"' || osid[strlen(osid)-1] == '\'') osid[strlen(osid)-1] = 0;
+                break;
+            }
+        }
+        fclose(fp);
+    }
+    // Ubuntu/Debian
+    if (strstr(osid, "ubuntu") || strstr(osid, "debian")) {
+        char path[256];
+        snprintf(path, sizeof(path), "/etc/network/interfaces.d/%s.cfg", ifname);
+        if (!file_exists(path)) {
+            if (!file_exists("/etc/network/interfaces.d") && file_exists("/etc/network/interfaces")) {
+                strcpy(path, "/etc/network/interfaces");
+            }
+        }
+        // 读取原内容，过滤掉包含del_ip的address/netmask行
+        FILE *f = fopen(path, "r");
+        if (!f) { printf("无法打开 %s\n", path); return; }
+        char lines[1024][256];
+        int count = 0;
+        // int skip_next = 0;
+        for (; fgets(lines[count], sizeof(lines[count]), f) && count < 1024; count++) {}
+        fclose(f);
+        // 查找包含del_ip的行，并同时删除紧跟的netmask行
+        int i;
+        for (i = 0; i < count; ++i) {
+            if (strstr(lines[i], del_ip)) {
+                lines[i][0] = '\0';
+                // 如果下一行是netmask，也删掉
+                if (i+1 < count && strstr(lines[i+1], "netmask")) lines[i+1][0] = '\0';
+            }
+        }
+        // 重写文件
+        f = fopen(path, "w");
+        if (!f) { printf("无法写入 %s\n", path); return; }
+        for (i = 0; i < count; ++i) {
+            if (lines[i][0] != '\0') fprintf(f, "%s", lines[i]);
+        }
+        fclose(f);
+        printf("已从 %s 删除IP %s\n", path, del_ip);
+        printf("正在重启网络服务: systemctl restart network\n");
+        system("systemctl restart network");
+        return;
+    }
+    // CentOS/RHEL/Fedora
+    if (strstr(osid, "centos") || strstr(osid, "rhel") || strstr(osid, "fedora")) {
+        char path[256];
+        snprintf(path, sizeof(path), "/etc/sysconfig/network-scripts/ifcfg-%s", ifname);
+        if (!file_exists(path)) {
+            printf("配置文件 %s 不存在！\n", path);
+            return;
+        }
+        // 读取原内容，过滤掉包含del_ip的IPADDR/NETMASK行
+        FILE *f = fopen(path, "r");
+        if (!f) { printf("无法打开 %s\n", path); return; }
+        char lines[1024][256];
+        int count = 0;
+        for (; fgets(lines[count], sizeof(lines[count]), f) && count < 1024; count++) {}
+        fclose(f);
+        // 查找与del_ip相关的IPADDR/NETMASK行号
+        int i;
+        int to_delete[32] = {0};
+        int del_count = 0;
+        for (i = 0; i < count; ++i) {
+            if (strstr(lines[i], del_ip)) {
+                to_delete[del_count++] = i;
+                // 检查下一行/上一行是否是NETMASK
+                if (i+1 < count && strstr(lines[i+1], "NETMASK")) to_delete[del_count++] = i+1;
+                if (i-1 >= 0 && strstr(lines[i-1], "NETMASK")) to_delete[del_count++] = i-1;
+            }
+        }
+        // 重写文件
+        f = fopen(path, "w");
+        if (!f) { printf("无法写入 %s\n", path); return; }
+        for (i = 0; i < count; ++i) {
+            int skip = 0;
+            int j;
+            for (j = 0; j < del_count; ++j) if (i == to_delete[j]) { skip = 1; break; }
+            if (skip) continue;
+            fprintf(f, "%s", lines[i]);
+        }
+        fclose(f);
+        printf("已从 %s 删除IP %s\n", path, del_ip);
+        // 判断是否为 CentOS 6
+        int is_centos6 = 0;
+        FILE *rel = fopen("/etc/centos-release", "r");
+        if (rel) {
+            char relstr[128] = "";
+            if (fgets(relstr, sizeof(relstr), rel)) {
+                if (strstr(relstr, "release 6")) is_centos6 = 1;
+            }
+            fclose(rel);
+        }
+        if (is_centos6) {
+            printf("正在重启网络服务: service network restart\n");
+            system("service network restart");
+        } else {
+            printf("正在重启网络服务: systemctl restart network\n");
+            system("systemctl restart network");
+        }
+        return;
+    }
+    printf("暂不支持该系统自动删除配置，请手动处理。\n");
 }
 
 void delete_ip() {
@@ -1057,7 +1202,7 @@ void delete_ip() {
     printf("你选择删除的IP是: %s\n", del_ip);
 
     // 3. 查找配置文件并删除对应IP和掩码
-     do_delete_ip(ifname, del_ip);
+    do_delete_ip(ifname, del_ip);
 }
 
 
